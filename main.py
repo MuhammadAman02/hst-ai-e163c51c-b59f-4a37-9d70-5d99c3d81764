@@ -1,51 +1,48 @@
+"""Main application entry point for Apple Store."""
+
 import os
 import sys
-from dotenv import load_dotenv
-from nicegui import ui
+from pathlib import Path
 
-# Load environment variables from .env file (if present)
-load_dotenv()
+# Add the project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
 
-# Import the page definitions from app.main
-# This ensures that the @ui.page decorators in app/main.py are executed
-# and the routes are registered with NiceGUI before ui.run() is called.
+# Load environment variables
 try:
-    import app.main  # noqa: F401 -> Ensure app.main is imported to register pages
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("python-dotenv not installed, skipping .env loading")
+
+# Import NiceGUI and FastAPI
+from nicegui import ui
+from fastapi import FastAPI
+
+# Import application components
+try:
+    import app.main  # This registers the NiceGUI pages
+    from app.core import (
+        settings, app_logger, setup_middleware, setup_routers,
+        setup_error_handlers, validate_environment, setup_database
+    )
 except ImportError as e:
-    print(f"Error importing app.main: {e}")
-    print("Make sure the app directory is properly set up.")
+    print(f"Failed to import application modules: {e}")
     sys.exit(1)
 
-# Create FastAPI app outside the if block so it can be imported by uvicorn
-from fastapi import FastAPI, APIRouter
-from app.core import (
-    settings, 
-    app_logger, 
-    setup_middleware, 
-    setup_routers, 
-    validate_environment,
-    setup_error_handlers,
-    HealthCheck,
-    is_healthy,
-    setup_nicegui
-)
-
+# Create FastAPI app
 app = FastAPI(
-    title=settings.APP_NAME,
-    description=settings.APP_DESCRIPTION,
-    version=settings.APP_VERSION,
-    docs_url=f"{settings.API_PREFIX}/docs" if settings.API_PREFIX else "/docs",
-    redoc_url=f"{settings.API_PREFIX}/redoc" if settings.API_PREFIX else "/redoc",
+    title=settings.app_name,
+    description=settings.app_description,
+    version=settings.app_version,
+    docs_url=f"{settings.api_prefix}/docs",
+    redoc_url=f"{settings.api_prefix}/redoc",
 )
 
-# Set up error handlers
+# Setup FastAPI components
 setup_error_handlers(app)
-
-# Set up middleware
 setup_middleware(app)
-
-# Set up routers
-setup_routers(app, api_prefix=settings.API_PREFIX)
+setup_routers(app, api_prefix=settings.api_prefix)
 
 # Validate environment
 errors = validate_environment()
@@ -53,41 +50,28 @@ if errors:
     for error in errors:
         app_logger.error(f"Environment validation error: {error}")
 
-# Optional: Set up database if configured
+# Setup database
 try:
-    from app.core import setup_database
     setup_database()
-except (ImportError, AttributeError):
-    app_logger.info("Database not configured, skipping setup")
+    app_logger.info("Database setup completed")
+except Exception as e:
+    app_logger.error(f"Database setup failed: {e}")
 
+# Mount FastAPI on NiceGUI
+ui.run_with(app, mount_path='/api')
 
-
-if __name__ in {"__main__", "__mp_main__"}: # Recommended by NiceGUI for multiprocessing compatibility
+if __name__ in {"__main__", "__mp_main__"}:
     try:
-        # Setup NiceGUI integration with FastAPI
-        from app.core.nicegui_setup import setup_nicegui
-        setup_nicegui(app)
-        
-        # Run the application
-        app_logger.info(f"Starting server at {settings.HOST}:{settings.PORT}")
+        app_logger.info(f"Starting Apple Store at {settings.host}:{settings.port}")
         ui.run(
-            host=settings.HOST,
-            port=settings.PORT,
-            title=settings.APP_NAME,
-            uvicorn_logging_level='info' if settings.DEBUG else 'warning',
-            reload=settings.DEBUG,  # IMPORTANT: Set to False for production/deployment
-            storage_secret=settings.SECRET_KEY,  # Use the same secret key for session storage
+            host=settings.host,
+            port=settings.port,
+            title=settings.app_name,
+            favicon='🍎',
+            reload=settings.debug,
+            show=True,
+            storage_secret=settings.secret_key
         )
     except Exception as e:
-        # Import traceback here to avoid circular imports
-        import traceback
-        
-        # Try to use app_logger if available, otherwise fall back to print
-        try:
-            app_logger.critical(f"Error starting application: {e}")
-            app_logger.critical(traceback.format_exc())
-        except NameError:
-            print(f"CRITICAL ERROR: {e}")
-            print(traceback.format_exc())
-        
+        app_logger.critical(f"Failed to start application: {e}")
         sys.exit(1)
